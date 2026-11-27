@@ -4,11 +4,96 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Token Radar: pre-token protocols ranked by implied value</title>
+<meta name="description" content="A radar of the protocols that record no token yet, ranked by what a token would be worth at their current TVL, with a farm plan for each.">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <a class="skip" href="#board">Skip to the board</a>
-<main id="board" tabindex="-1" aria-busy="true"></main>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="sweep" aria-hidden="true"></span>
+    <span class="brand-text">
+      <strong>Token Radar</strong>
+      <em>pre-token scan</em>
+    </span>
+  </div>
+  <div class="topmeta" id="topmeta">
+    <span class="pill" id="pill-snapshot">snapshot</span>
+    <span class="pill" id="pill-floor">floor</span>
+    <span class="pill pill-quiet" id="pill-model">model</span>
+  </div>
+</header>
+
+<main id="board" tabindex="-1">
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">Launch watch</p>
+      <h1 id="hero-title">Loading the radar</h1>
+      <p class="lede" id="hero-lede">
+        Every protocol the snapshot tracks, read once, scored on the protocol's own record: its TVL, its
+        seven-day change and how long it has run without a token.
+      </p>
+    </div>
+    <dl class="kpis" id="kpis"></dl>
+  </section>
+
+  <section class="controls" aria-label="Filters">
+    <label class="search">
+      <span class="label">Find</span>
+      <input id="q" type="search" placeholder="protocol, category or chain" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="select">
+      <span class="label">Category</span>
+      <select id="category"><option value="all">All categories</option></select>
+    </label>
+    <div class="tabs" role="tablist" aria-label="Board">
+      <button id="tab-pre" role="tab" aria-selected="true" class="tab is-on">Pre-token board</button>
+      <button id="tab-live" role="tab" aria-selected="false" class="tab">Live token market</button>
+    </div>
+    <p class="count" id="count" aria-live="polite"></p>
+  </section>
+
+  <section class="board-wrap">
+    <table class="board" id="board-table">
+      <thead>
+        <tr>
+          <th class="num col-rank" data-sort="rank" scope="col">#</th>
+          <th class="col-name" data-sort="name" scope="col">Protocol</th>
+          <th class="num" data-sort="tvl" scope="col">TVL</th>
+          <th class="num" data-sort="growth" scope="col">7d</th>
+          <th class="num" data-sort="age" scope="col">No token for</th>
+          <th class="num" data-sort="implied" scope="col">Implied value</th>
+          <th class="num col-mult" data-sort="multiple" scope="col">Launch mult</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="empty" id="empty" hidden>Nothing matches that filter. Clear it and the board returns.</p>
+  </section>
+
+  <section class="method">
+    <h2>How the number is made</h2>
+    <p>
+      A protocol's implied value is its TVL times a launch multiple learned from the snapshot's own
+      live-token protocols, times a growth multiplier from its seven-day change, times a maturity
+      multiplier from how long it has run without a token. Nothing is hand-listed: no protocol name is
+      special-cased, and every row can be recomputed from the figures on it.
+    </p>
+    <ol class="formula">
+      <li><b>Launch multiple</b>: the median market-cap-to-TVL ratio of the protocols that already trade, taken per category and shrunk toward the whole market when a category is thin.</li>
+      <li><b>Growth multiplier</b>: seven-day TVL change, clamped to a sane band, so one noisy week cannot decide the board.</li>
+      <li><b>Maturity multiplier</b>: a longer run without a token raises the value, up to three years; an unknown listing date is treated as one year.</li>
+    </ol>
+    <p class="fine" id="fine"></p>
+  </section>
+</main>
+
+<aside class="detail" id="detail" hidden aria-live="polite">
+  <button class="close" id="close" aria-label="Close detail">&times;</button>
+  <div id="detail-body"></div>
+</aside>
+
 <script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
