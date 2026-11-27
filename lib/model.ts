@@ -97,6 +97,7 @@ export interface BoardRow {
   implied_value_usd: number;
   model: {
     base_multiple: number;
+    category_multiple: number;
     growth_pct: number;
     growth_multiplier: number;
     maturity_multiplier: number;
@@ -172,15 +173,77 @@ export function ageDays(asOf: string, listedAt: string | null): number | null {
   return Math.max(0, Math.floor((a - b) / DAY_MS));
 }
 
+/** A capped window on the growth multiplier, so one noisy week cannot swamp the ranking. */
+const GROWTH_FLOOR_CLAMP = -60;
+
+/** A peer's market-cap-to-TVL ratio outside this band is noise (a stub token, a mispriced pair). */
+const RATIO_MIN = 0.01;
+const RATIO_MAX = 200;
+
+/** How many peers a category needs before its own median outweighs the universe's. */
+const PEER_PRIOR = 20;
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/**
+ * The launch multiple, learned from the snapshot's own live-token protocols instead of assumed: for every
+ * protocol that records both a token market cap and a TVL, mcap/tvl says what the market paid for one
+ * dollar of that protocol's TVL. The universe's median is the prior; a category with enough peers gets
+ * its own median, shrunk toward the prior by how few peers it has (n/(n+20)). No name is special-cased:
+ * a protocol still waiting for its token is valued at what its own category's tokens trade at.
+ */
+export interface Multiples {
+  universe: number;
+  by_category: Map<string, number>;
+  peers: number;
+}
+
+export function calibrateMultiples(snapshot: Snapshot, model: ModelConstants): Multiples {
+  const ratios: number[] = [];
+  const byCategory = new Map<string, number[]>();
+  for (const p of snapshot.protocols) {
+    if (p.mcap_usd === null || p.tvl_usd <= 0) continue;
+    const ratio = p.mcap_usd / p.tvl_usd;
+    if (!Number.isFinite(ratio) || ratio < RATIO_MIN || ratio > RATIO_MAX) continue;
+    ratios.push(ratio);
+    const key = p.category;
+    if (key !== null) {
+      const list = byCategory.get(key);
+      if (list === undefined) byCategory.set(key, [ratio]);
+      else list.push(ratio);
+    }
+  }
+  const universe = median(ratios) ?? model.base_multiple;
+  const shrunk = new Map<string, number>();
+  for (const [key, list] of byCategory) {
+    const own = median(list);
+    if (own === null) continue;
+    const weight = list.length / (list.length + PEER_PRIOR);
+    shrunk.set(key, weight * own + (1 - weight) * universe);
+  }
+  return { universe, by_category: shrunk, peers: ratios.length };
+}
+
+/** The multiple one protocol is valued at: its category's, else the universe's. */
+export function multipleFor(protocol: SnapshotProtocol, multiples: Multiples): number {
+  const own = protocol.category === null ? undefined : multiples.by_category.get(protocol.category);
+  return own ?? multiples.universe;
+}
+
 /** The three multipliers and the implied value one protocol gets under `model`. */
-export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
+export function impliedValue(protocol: SnapshotProtocol, asOf: string, model: ModelConstants, multiple = model.base_multiple): { implied: number; growthPct: number; growthMult: number; maturityMult: number; age: number | null } {
   const age = ageDays(asOf, protocol.listed_at);
   const rawGrowth = finite(protocol.change_7d, 0);
-  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, rawGrowth));
+  const growthPct = Math.min(model.growth_cap, Math.max(Math.max(model.growth_floor, GROWTH_FLOOR_CLAMP), rawGrowth));
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
   const ageForModel = age ?? model.unknown_age_days;
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
-  const base = protocol.tvl_usd * model.base_multiple;
+  const base = protocol.tvl_usd * multiple;
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult));
   return { implied, growthPct, growthMult, maturityMult, age };
 }
@@ -229,9 +292,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
 
+  const multiples = calibrateMultiples(snapshot, model);
   const scored = [...chosen.values()].map((p) => {
-    const { implied, growthPct, growthMult, maturityMult, age } = impliedValue(p, snapshot.as_of, model);
-    return { p, implied, growthPct, growthMult, maturityMult, age };
+    const multiple = multipleFor(p, multiples);
+    const { implied, growthPct, growthMult, maturityMult, age } = impliedValue(p, snapshot.as_of, model, multiple);
+    return { p, implied, growthPct, growthMult, maturityMult, age, multiple };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -251,6 +316,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     implied_value_usd: s.implied,
     model: {
       base_multiple: model.base_multiple,
+      category_multiple: round4(s.multiple),
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
